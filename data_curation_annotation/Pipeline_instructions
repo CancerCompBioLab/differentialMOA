@@ -1,0 +1,9 @@
+
+MECHANISM OF ACTION ANNOTATION CURATION
+
+1. Python files 'chembl_gdsc.ipynb' and 'chembl_prims.ipynb' are used to obtain annotation of chembl for drugs in each database. Output of this process is found in the 'intermediate_files' folder, used in the scripts for the following step.
+2. Annotation curation for the mechanism's of action is performed in 'MOA_annotation_PRISM.Rmd' and 'MOA_annotation_GDSC2.Rmd'.
+
+CELL LINE AND DRUG CURATION
+
+Curation is performed for both databases in 'data_curation_PRISM.R' and 'data_curation_GDSC2.R'. This includes adding identifiers for all cell lines, re-annotation of some of the cell lines based on TCGA and removal of duplicated drug-cell line results.

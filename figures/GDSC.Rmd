@@ -1,0 +1,179 @@
+---
+title: "GDSC2"
+author: "Maria Butjosa"
+date: "2023-06-22"
+output: html_document
+---
+
+# Database description
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(fgsea)
+library(doParallel)
+library(foreach)
+library(gridExtra)
+library(ggrepel)
+library(gridExtra)
+library(RColorBrewer)
+library(ggpubr)
+```
+
+# Modeling
+
+## Data prep
+
+```{r}
+glm_db <- readRDS('preprint_repo/data/gdsc_drug_cells.rds')
+glm_db$PrimaryOrMetastasis <- factor(glm_db$PrimaryOrMetastasis)
+contrasts(glm_db$PrimaryOrMetastasis)
+```
+
+
+## Model by Type + Sex
+
+```{r Model w type and sex}
+
+glm_db_Sex <- glm_db %>% filter(Sex != 'Unknown')
+glm_db_Sex$Sex <- factor(glm_db_Sex$Sex)
+drug_list <- glm_db_Sex %>% pull(DRUG_NAME) %>% unique()
+coef_list <- matrix(nrow = 0, ncol = 4) %>% as.data.frame()
+glm_db_Sex %>% group_by(Curated_Type) %>% summarise(n = n())
+l <- length(drug_list)
+
+mcaffinity(1:15)
+registerDoParallel(15)
+result <- foreach(i = 1:l, .combine = rbind) %dopar% {
+
+  m <- glm( PrimaryOrMetastasis ~ AUC + Curated_Type + Sex ,
+              data = glm_db_Sex %>% filter(Sex != 'Unknown')%>% filter(DRUG_NAME == drug_list[i]),
+              family = binomial(link = 'logit'))
+  s <- summary(m)
+
+  c(drug_list[i],s$coefficients[2,])
+}
+coef_list_type_sex_gdsc2 <- result %>% as.data.frame() %>% 
+  mutate('padj' = p.adjust(`Pr(>|z|)`, method = 'fdr')) %>% arrange(`Pr(>|z|)`)
+
+```
+
+
+
+
+
+```{r Volcano plot }
+coef_list_type_sex_gdsc2$Estimate <- coef_list_type_sex_gdsc2$Estimate %>% as.numeric()  
+coef_list_type_sex_gdsc2$`Pr(>|z|)` <- coef_list_type_sex_gdsc2$`Pr(>|z|)` %>% as.numeric() 
+coef_list_type_sex_gdsc2$names <- rownames(coef_list_type_sex_gdsc2)
+
+paper_colors <-  c('#41BBC5','#FFBA45','grey80',"#1D686E")
+
+volcano_type_sex <- coef_list_type_sex_gdsc2  %>% 
+  filter(Estimate > -40) %>% filter(!Estimate > 20) %>% 
+    mutate(significant = #V1 is the coefficient, V4 the pvalue
+             case_when(Estimate >= 0 & `Pr(>|z|)` <= 0.05 ~ "Enriched",
+                       Estimate < 0 & `Pr(>|z|)` <= 0.05 ~ "Depleated",
+                       .default = 'NOT')) %>% 
+    #Volcano plot
+    ggplot(aes(x = Estimate, y = -log(`Pr(>|z|)`))) +
+      geom_point( aes(colour = significant, size = significant), show.legend = FALSE) + 
+     
+      xlab('Coefficient') + ylab('-log(p)') +  scale_y_continuous(limits = c(0, NA))+
+      scale_size_manual(values = c(3, 3,1)) + xlim(c(-20,20))+
+      scale_colour_manual(values = paper_colors[1:3]) + theme_classic() +
+      theme(axis.text =  element_text(size = 9, family  = 'Carlitos',
+                                      #color=paper_colors[4]
+                                      ),
+            axis.title= element_text(size = 12,family  = 'Carlitos', colour = "grey30"),
+            ) +
+      geom_text_repel(aes(label = 
+                            ifelse(significant %in% c('Enriched','Depleated'),as.character(V1),'')),
+                      box.padding   = 0.5, 
+                      point.padding = 0.2,
+                      size = 2.5,
+                      segment.color = 'grey50',
+                      max.overlaps = 10)
+volcano_type
+
+```
+
+## DSEA analysis
+
+### Drug data 
+
+```{r}
+gdsc2_out <- read.csv('output/gdsc2_curated_MOAs.csv',sep = ',')
+```
+
+```{r}
+gdsc2_out <- gdsc2_out %>% 
+  mutate(united_values = ifelse(united_values == 'Histone acetylation effector','Histone deacetylase inhibitor',united_values))
+
+```
+
+```{r df drug-moa}
+
+drug_moa_uniq <- gdsc2_out %>% select(drug_name, united_values) %>% 
+  distinct(drug_name,united_values, .keep_all=TRUE) %>% 
+  tidyr::separate_rows(united_values, sep = ',')
+drug_moa_uniq$united_values <-drug_moa_uniq$united_values %>% gsub(pattern = '^ ', replacement = '')%>% as.factor()
+
+drugMOA <- split(drug_moa_uniq$drug_name,drug_moa_uniq$united_values)
+
+drugMOA$moas <- rownames(drugMOA)
+```
+
+
+```{r Ranked list by type pancan sex2}
+
+coef_list_type_sex_gdsc2$Estimate <- coef_list_type_sex_gdsc2$Estimate %>% as.numeric()  
+coef_list_type_sex_gdsc2$`Pr(>|z|)` <- coef_list_type_sex_gdsc2$`Pr(>|z|)` %>% as.numeric() 
+
+
+p_rank_tsex_gdsc2 <- coef_list_type_sex_gdsc2 %>% mutate(direction = ifelse(Estimate <0, -1,1)) %>% 
+  mutate(p_rank = -log(`Pr(>|z|)`)*direction) %>% pull(p_rank)
+names(p_rank_tsex_gdsc2) <- coef_list_type_sex_gdsc2$V1
+p_rank_tsex_gdsc2 <- p_rank_tsex_gdsc2 %>% sort()
+# head(p_rank)
+```
+
+```{r gsea algorithm}
+source('preprint_repo/code/modif_gseatab.R')
+set.seed(123)
+fgseaRes <- fgseaSimple(pathways = drugMOA, 
+                  stats    = p_rank_tsex_gdsc2,
+                  minSize  = 5,
+                  maxSize  = 100,
+                  nperm=100000) %>% arrange(pval)
+```
+
+
+```{r Akt step plot}
+
+plot.new()
+plotEnrichment(drugMOA[['AKT inhibitor']], p_rank_tsex_gdsc2,gseaParam = 1, ticksSize = 0.2) +
+  geom_line(color = '#FFBA45',size = 1)+ theme_blank() + 
+        labs(x = "Drug Rank", y = "Enrichment score") + 
+  theme(axis.ticks.x =  element_line(color = "#016490"))
+
+```
+
+
+```{r Dotplot for paper}
+fgsea_ranked <- fgseaRes %>% filter(pval < 0.05) %>% arrange(desc(pval))
+# lock in factor level order
+fgsea_ranked$pathway <- factor(fgsea_ranked$pathway, levels = fgsea_ranked$pathway)
+fgsea_ranked
+dotplot_gdsc <- ggplot(fgsea_ranked, aes(x = NES, y = pathway, color = pval, size = size)) +
+  geom_point(stat = 'identity', show.legend = TRUE) +
+    labs(x = "NES",  y = "MOA", color = 'pval', size= 'MOA group size')  + 
+  theme_classic2() +
+  scale_size_continuous(range = c(6,8.75),breaks = c(3,7, 11)) + 
+  geom_hline(aes(yintercept = 3.5), color = 'grey') + 
+  scale_color_gradient(high =  '#d4f9fc', low = '#41BBC5') 
+
+dotplot_gdsc
+```
+

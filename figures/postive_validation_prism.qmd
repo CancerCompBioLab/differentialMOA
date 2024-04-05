@@ -1,0 +1,163 @@
+---
+title: "Positive validation"
+format: html
+editor: visual
+---
+
+
+
+### Packages
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(fgsea)
+library(gridExtra)
+library(RColorBrewer)
+library(fgsea)
+library(ggpubr)
+```
+
+```{r Open drug cell object}
+
+drug_cl_glm <- readRDS('output/drug_cel_prism.rds')
+
+
+```
+
+There are 14 drugs that have estrogen receptors as its target (MOA)
+
+## Annotation change to ER better results
+
+```{r df drug-moa}
+
+drug_moa_uniq <- read.csv('data/moas_compared.csv') 
+
+MOA2_distinct <- drug_moa_uniq %>% select(name, moas_curated) %>% distinct()
+
+MOA_nested <- split(drug_moa_uniq$name,drug_moa_uniq$moas_curated)
+```
+
+```{r}
+list_ant <- drug_moa_uniq %>% filter(grepl(pattern = 'strogen receptor ant',moas_curated)) %>% pull(name)
+drug_moa_uniq <- drug_moa_uniq %>% mutate(moas_curated  =ifelse(name %in% list_ant, 'Estrogen receptor antagonist',moas_curated))
+#%>% pull(moas_curated) %>% gsub(pattern = 'Estrogen receptor antagonist', replacement = 'Estrogen receptor agonist')
+```
+
+# 1. Identification of cell lines that are ER+ vs ER-
+
+```{r}
+breast_results <- drug_cl_glm %>%  filter(OncotreeLineage == 'Breast') 
+clasif_arnau <- read.table('data/MariaB_CCLE-BRCA_molecular-subtypes.tsv')
+read.csv('data/ERstateCCLE.csv', sep = ',')
+
+breast_ER <- merge(breast_results,
+      clasif_arnau, by.y = 0, by.x ='depmap_id' ) 
+
+
+```
+
+There are 6 cell lines with a positive ER and 13 with a negative ER status.
+
+The model doesn't need to be adjusted by any co-variable (all samples are female).
+
+```{r}
+
+drug_list <- breast_ER  %>% pull(name) %>% unique()
+#coef_list <- matrix(nrow = 0, ncol = 4) %>% as.data.frame()
+l <- length(drug_list)
+
+breast_ER$ER <- factor(breast_ER$ER, label = c('negative','positive'))
+
+breast_ER$ER <- relevel(breast_ER$ER, ref = 'positive')
+contrasts(breast_ER$ER)
+
+library(foreach)
+library(doParallel)
+library(parallel)
+library(dplyr)
+
+result <- foreach(i = 1:1446, .combine = rbind) %dopar% {
+  m <- glm( ER ~ auc ,
+              data = breast_ER %>% filter(name == drug_list[i]),
+              family = binomial(link = 'logit'))
+  s <- summary(m)
+
+  c(drug_list[i],s$coefficients[2,])
+}
+coef_list_breast_er <- result %>% as.data.frame() %>% 
+  mutate('padj' = p.adjust(`Pr(>|z|)`, method = 'fdr')) %>% arrange(`Pr(>|z|)`)
+
+```
+
+Hydrochlorine removed becauseit was NA.
+
+```{r}
+
+coef_list_breast_er %>% filter(V1 %in% (drug_moa_uniq %>% filter(grepl(pattern = 'strogen receptor ant',moas_curated)) %>% pull(name)))
+coef_list_breast_er %>% filter(V1 %in% (drug_moa_uniq %>% filter(grepl(pattern = 'strogen receptor ag',moas_curated)) %>% pull(name)))
+coef_list_breast_er %>% filter(V1 == 'tamoxifen')
+
+drug_moa_uniq %>% filter(grepl(pattern = 'strogen receptor ant',moas_curated)) %>% pull(name)
+breast_ER$ER <- factor(breast_ER$ER)
+breast_ER %>% filter(name == 'fulvestrant') %>% ggplot(aes(x = ER,y = auc)) + geom_boxplot()
+breast_ER %>% filter(name == 'tamoxifen') %>% ggplot(aes(x = ER,y = auc)) + geom_boxplot()
+```
+
+## 2. Perform MOA analysis
+
+```{r df drug-moa}
+
+drug_moa_uniq <- read.csv('output/moas_compared.csv')
+  
+
+MOA2_distinct <- drug_moa_uniq %>% select(name, moas_curated) %>% distinct()
+
+MOA_nested <- split(drug_moa_uniq$name,drug_moa_uniq$moas_curated)
+drug_moa_uniq %>% filter(grepl(pattern = 'strogen',moas_curated)) 
+
+
+```
+
+```{r Ranked list by type pancan}
+
+coef_list_breast_er$`Pr(>|z|)` <- as.numeric(coef_list_breast_er$`Pr(>|z|)`)
+coef_list_breast_er$Estimate <- as.numeric(coef_list_breast_er$Estimate)
+rownames(coef_list_breast_er) <- coef_list_breast_er$V1
+p_rank_br <- coef_list_breast_er %>% 
+  mutate(direction = ifelse(Estimate <0, -1,1)) %>% 
+  mutate(p_rank_br = -log(`Pr(>|z|)`)*direction) %>% pull(p_rank_br)
+names(p_rank_br) <- rownames(coef_list_breast_er)
+p_rank_br <- p_rank_br %>% sort()
+# head(p_rank)
+
+```
+
+```{r}
+drug_moa_uniq %>% filter(grepl(pattern = 'romatase',moas_curated)) 
+
+merge(coef_list_breast_er, MOA2_distinct,
+      by.x = 'V1', by.y = 'name')  %>% arrange(`Pr(>|z|)`) %>% filter(grepl(pattern = 'strogen receptor anta',moas_curated)) %>% select(- c(`z value`, padj)) 
+merge(coef_list_breast_er, MOA2_distinct,
+      by.x = 'V1', by.y = 'name')  %>% arrange(`Pr(>|z|)`) %>% filter(grepl(pattern = 'strogen receptor ag',moas_curated)) %>% select(- c(`z value`, padj)) 
+```
+
+```{r }
+set.seed(123)
+library(fgsea)
+source('preprint_repo/code/modif_gseatab.R')
+fgseaRes_br <- fgsea(pathways = MOA_nested, 
+                  stats    = p_rank_br,
+                  minSize  = 5,
+                  maxSize  = 10000) %>% arrange(pval)
+
+```
+
+```{r}
+plot.new()
+gsea_AKT <- plotEnrichment(MOA_nested[['AKT inhibitor']], p_rank_br,gseaParam = 1, ticksSize = 0.2) +
+  geom_line(color = "orange",size = 2)
+gsea_AKT
+```

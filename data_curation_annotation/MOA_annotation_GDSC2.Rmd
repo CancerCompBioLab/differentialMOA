@@ -1,0 +1,454 @@
+---
+title: "MOA_annotation_GDSC2"
+author: "Maria Butjosa"
+
+---
+
+```{r setup}
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+
+```{r}
+GDSC2_drug_info <- read.csv('figures/data/drug_info_GDSC2.csv')
+```
+
+## GDSC ANNOTATION
+
+### 1. Download data from Python and filtering NAs (no info from chEMBL)
+
+```{r}
+moas_gdsc <- left_join(read.csv('data_curation_annotation/intermediate_files/syn-id_gdsc.csv'),
+          left_join(read.csv('data_curation_annotation/intermediate_files/chemblids_df_python_gdsc2.csv'),
+          read.csv('data_curation_annotation/intermediate_files/moas_df_python_gdsc.csv'),
+          by = c('X0' = 'X')),
+          by = c('all_names' = 'X')) %>% filter(!is.na(X0))
+```
+
+There are 155 drugs identified in chEMBL.
+
+The GDSC2 is separated in two data.frame: chEMBL identified (gdsc_1) and non-identified MOAs (gdsc_2).
+
+To perform the classification, the process has been ordered by the previous GDSC 'pathway' classification.
+
+```{r}
+gdsc_1 <- left_join(GDSC2_drug_info, moas_gdsc %>% select(drug_id, MOAs,definitions) %>% distinct(),
+          by = 'drug_id') %>%  mutate(MOAs = gsub(MOAs,pattern ='\\:\\(', replacement = '')) %>%
+  unite(col = 'hi',MOAs:definitions, sep = ', ') %>% mutate(hi = gsub(hi,pattern ='NA, NA', replacement = '')) %>% 
+   filter(hi!='')%>% 
+  separate_rows(hi, sep = ', ') %>% select(drug_id,pathway_name,targets,hi) %>% distinct() %>% arrange(desc(hi)) %>% 
+  separate_rows(hi, sep = '; ') 
+```
+
+```{r}
+gdsc_2 <- left_join(GDSC2_drug_info, moas_gdsc %>% select(drug_id, MOAs,definitions) %>% distinct(),
+          by = 'drug_id') %>%  mutate(MOAs = gsub(MOAs,pattern ='\\:\\(', replacement = '')) %>%
+  unite(col = 'hi',MOAs:definitions, sep = ', ') %>% mutate(hi = gsub(hi,pattern ='NA, NA', replacement = '')) %>% 
+  arrange(desc(hi)) %>% filter(hi==', ' | hi =='')
+```
+
+# MOAs annotation
+
+```{r Annotation functions}
+moas_curated <- ''
+str_annotate_1 <- function(str_vector,moa_new_name){
+  gdsc_1 %>%
+    mutate(
+      moas_matched = grepl(paste(str_vector, collapse = "|"), targets),
+      hi_matched = grepl(paste(str_vector, collapse = "|"), hi),
+      moas_curated = ifelse(moas_matched | hi_matched, moa_new_name, moas_curated)) %>% 
+    select(-c('moas_matched'))
+}
+
+str_annotate_2 <- function(str_vector,moa_new_name){
+  gdsc_2 %>%
+    mutate(
+      moas_matched = grepl(paste(str_vector, collapse = "|"), targets),
+      moas_curated = ifelse(moas_matched, moa_new_name, moas_curated)) %>% 
+    select(-c('moas_matched'))
+}
+```
+
+
+```{r annotated chEMBL}
+str_annotate_1 <- function(str_vector,moa_new_name){
+  gdsc_1 %>%
+    mutate(
+      hi_matched = grepl(paste(str_vector, collapse = "|"), hi),
+      moas_curated = ifelse( hi_matched, moa_new_name, moas_curated)) %>% 
+    select(-c('hi_matched'))
+}
+```
+
+
+## Cell cycle
+
+```{r Cell cycle}
+gdsc_1 <- str_annotate_1(str_vector = c('wee','PLK', 'WEE','plk'), moa_new_name = 'Wee/Plk inhibitor') 
+gdsc_1 <- str_annotate_1(str_vector = c('CDK','yclin dep', 'Cyclin'), moa_new_name = 'CDK inhibitor')
+gdsc_1 <- str_annotate_1(str_vector = c('CHEK','Chk','CHK'), moa_new_name = 'Chk inhibitor')
+
+
+
+gdsc_2 <- str_annotate_2(str_vector = c('wee','PLK', 'WEE','plk'), moa_new_name = 'Wee/Plk inhibitor') 
+gdsc_2 <- str_annotate_2(str_vector = c('CDK','yclin dep', 'Cyclin'), moa_new_name = 'CDK inhibitor')
+#gdsc_2 <- str_annotate_2(str_vector = c('CHEK','Chk'), moa_new_name = 'Chk inhibitor')
+
+```
+
+## Apoptosis and p53-related pathways
+
+```{r Apoptosis and p53 pathway}
+
+## GDSC1
+gdsc_1 <- str_annotate_1(str_vector = c('BCL','poptosis','Bcl'), moa_new_name = 'Apoptosis regulator inhibitor') 
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('BIRC5|MCL1|IAP',targets),
+                                                  'Apoptosis regulator inhibitor',moas_curated))
+
+## GDSC2
+gdsc_2 <- str_annotate_2(str_vector = c('BCL','poptosis','Bcl','BIRC5','MCL1'), moa_new_name = 'Apoptosis regulator inhibitor')
+
+
+## GDSC1
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl( 'MDM2',targets),'MDM2 inhibitor',moas_curated))
+
+## GDSC2
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl( 'MDM2',targets),'MDM2 inhibitor',moas_curated))
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl( 'P53',targets),'p53 activator',moas_curated))
+
+```
+
+
+```{r NfkB pathway}
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(moas_curated == '' & pathway_name == 'Other', hi , moas_curated))
+
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl( 'IKK|IAP',targets),'NfkB pathway inhibitor',moas_curated))
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(moas_curated == '' & pathway_name == 'Other',pathway_name,moas_curated))
+
+```
+
+
+
+```{r NFkB annotated}
+gdsc_2 <- str_annotate_2(str_vector = c('TBK','NIK','ULK1','PIM1'), 
+                         moa_new_name = 'NfkB pathway inhibitor')
+```
+
+
+## MAPK annotation
+
+```{r MAPK chEMBL}
+
+## GDSC1
+gdsc_1 <- str_annotate_1(str_vector = c('RAF'), moa_new_name = 'RAF kinase inhibitor') 
+gdsc_1 <- str_annotate_1(str_vector = c('MEK', 'mitogen-activated protein kinase kinase'), 
+                         moa_new_name = 'MEK inhibitor') 
+gdsc_1 <- str_annotate_1(str_vector = c('ERK'), moa_new_name = 'ERK inhibitor')
+
+## GDSC2
+gdsc_2 <- str_annotate_2(str_vector = c('RAF'), moa_new_name = 'RAF kinase inhibitor')
+gdsc_2 <- str_annotate_2(str_vector = c('ERK'), moa_new_name = 'ERK inhibitor')
+gdsc_2 <- str_annotate_2(str_vector = c('MEK'), moa_new_name = 'MEK inhibitor')
+gdsc_2 <- str_annotate_2(str_vector = c('RAS'), moa_new_name = 'Ras inhibitor')
+```
+
+```{r p38 - JNK}
+
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('p38|JNK', hi),'JNK/p38 inhibitor',moas_curated))
+
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl('p38|JNK', targets),'JNK/p38 inhibitor',moas_curated))
+
+```
+
+## Kinases
+
+
+```{r JAK kinases chEMBL}
+#GDSC1
+gdsc_1 <-str_annotate_1(str_vector = c('JAK'), moa_new_name = 'JAK inhibitor')
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('^JAK',targets),'JAK inhibitor',moas_curated))
+
+#GDSC2
+gdsc_2 <- str_annotate_2(str_vector = c('JAK'), moa_new_name = 'JAK inhibitor')
+```
+
+```{r ABL kinases chEMBL}
+
+gdsc_1 <-str_annotate_1(str_vector = c('ABL'), moa_new_name = 'ABL tyrosine kinase inhibitor')
+
+gdsc_1 <-gdsc_1 %>% mutate(moas_curated = ifelse(grepl('ABL',targets),'ABL tyrosine kinase inhibitor',moas_curated))
+
+gdsc_2 <-str_annotate_2(str_vector = c('ABL'), moa_new_name = 'ABL tyrosine kinase inhibitor') 
+
+```
+
+```{r Other kinases chEMBL}
+gdsc_1 <-str_annotate_1(str_vector = c('BTK','Btk'), moa_new_name = 'BTK inhibitor')
+
+gdsc_1 <-str_annotate_1(str_vector = c('ALK'), moa_new_name = 'ALK tyrosine kinase inhibitor')
+
+gdsc_1 <-str_annotate_1(str_vector = c('ATR'), moa_new_name = 'ATR inhibitor')
+
+gdsc_1 <-str_annotate_1(str_vector = c('RET','TIE-2','SYK'), moa_new_name = 'Other RTK inhibitor')
+
+gdsc_1 <-str_annotate_1(str_vector = c('SRC','SYK','HCK','Neurotrophic','Lyn'), 
+                        moa_new_name = 'Tyrosine kinase inhibitor')
+
+##GDSC2
+gdsc_2 <- str_annotate_2(str_vector = c('LRRK2','IRAK','ULK1','PIM1'), 
+                         moa_new_name = 'Kinase inhibitor')
+
+gdsc_2 <- str_annotate_2(str_vector = c('SRC','SYK','HCK','DYRK','NUAK'), 
+                         moa_new_name = 'Tyrosine kinase inhibitor')
+```
+
+## Mitosis
+
+```{r Mitosis}
+## GDSC1
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('AURK', targets),'Aurora kinase inhibitor',moas_curated)) 
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('stabi', targets),targets,moas_curated)) 
+gdsc_1 <-str_annotate_1(str_vector = c('Aurora'), moa_new_name = 'Aurora kinase inhibitor')
+## GDSC2
+gdsc_2 <- str_annotate_2(str_vector = c('AURK'), moa_new_name = 'Aurora kinase inhibitor')
+```
+
+## Hormones
+
+```{r Hormone annotation}
+
+gdsc_1<- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('ESR', targets),
+                                                 'Estrogen receptor antagonist',moas_curated))
+gdsc_2<- gdsc_2 %>% mutate(moas_curated = ifelse(grepl('ESR', targets),
+                                                 'Estrogen receptor antagonist',moas_curated))
+
+gdsc_1<- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('AR', targets),
+                                                 'Androgen receptor/biosynthesis modulator',moas_curated))
+gdsc_2<- gdsc_2 %>% mutate(moas_curated = ifelse(grepl('AR', targets),
+                                                 'Androgen receptor/biosynthesis modulator',moas_curated))
+```
+
+## DNA regulation/inhibitors
+
+```{r DNA inhibitors}
+## GDSC1
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('TOP', targets),'Topoisomerase inhibitor',moas_curated))
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('DNA alkyl|Alkyl|crosslink|yrimidine synthesis inhibitor', targets),'DNA alkylating/crosslinking/intercalating agent',moas_curated)) 
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('Anthracycline|dsDNA break|quadruplex', targets) |grepl('opoisomer|DNA inhibitor', hi),'DNA inhibitor',moas_curated)) 
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('ntimetabolite', targets),'Anti-metabolite/nucleotide',moas_curated)) 
+
+## GDSC2
+gdsc_2 <- str_annotate_2(str_vector = c('TOP'), moa_new_name = 'Topoisomerase inhibitor')
+gdsc_2 <- str_annotate_2(str_vector = c('DNA alkyl|Alkyl|crosslink|yrimidine synthesis inhibitor'), moa_new_name = 'DNA alkylating/crosslinker agent')
+gdsc_2 <- str_annotate_2(str_vector = c('Anthracycline|dsDNA break|quadruplex'), moa_new_name = 'DNA inhibitor')
+gdsc_2 <- str_annotate_2(str_vector = c('ntimetabolite'), moa_new_name = 'Anti-metabolite/nucleotide')
+```
+
+```{r unknown GDSC 1 MISSING}
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(pathway_name == 'Unclassified', 'Unknown', moas_curated))
+```
+
+
+```{r Metabolism}
+metabolis <- c('NAMPT', 'PERK', 'IDH')
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('Metabolism', pathway_name),'Metabolism',moas_curated))
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl('Metabolism', pathway_name),'Metabolism',moas_curated))
+```
+
+### Protein degradation and stability
+
+```{r Protein degradation}
+
+## GDSC1
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('CRBN', targets),'E3 ubiquitin ligase inhibitor',moas_curated))
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('HSP', targets),'HSP inhibitor',moas_curated))
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('Proteasome', targets),'Proteosome inhibitor',moas_curated))
+
+## GDSC2
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl('USP', targets),'E3 ubiquitin ligase inhibitor',moas_curated))
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl('HSP', targets),'HSP inhibitor',moas_curated))
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl('Proteasome', targets),'Proteosome inhibitor',moas_curated))
+```
+
+
+### RTK signaling inhibitors
+
+The annotation is made by receptor type, and those that have less than 2 drugs associated or that have no extra ifnromation, the RTK signaling pathway given by GDSC2 is maintained.
+
+```{r RTK inhibitors annotation}
+
+## GDSC1
+
+gdsc_1 <- str_annotate_1(str_vector = c('ascular endothelial|angiog'), 
+                         moa_new_name = 'VEGF receptor inhibitor') 
+
+gdsc_1 <- str_annotate_1(str_vector = c('tem cell growth factor'), 
+                         moa_new_name = 'SCGF receptor inhibitor') 
+
+gdsc_1 <- str_annotate_1(str_vector = c('latelet-derived growth factor receptor'), 
+                         moa_new_name = 'PDGF receptor inhibitor')
+
+gdsc_1 <- str_annotate_1(str_vector = c('epatocyte growth factor receptor inhibitor'), 
+                         moa_new_name = 'HGF receptor inhibitor')
+
+gdsc_1 <- str_annotate_1(str_vector = c('ibroblast growth factor'), 
+                         moa_new_name = 'FGF receptor inhibitor')
+
+gdsc_1 <- gdsc_1 %>%  mutate(moas_curated = ifelse(moas_curated == '' & pathway_name == 'RTK signaling','RTK signaling',moas_curated)) 
+
+## GDSC2
+gdsc_2 <- str_annotate_2(str_vector = c('FGF'), 
+                         moa_new_name = 'FGF receptor inhibitor')
+
+gdsc_2 <- gdsc_2 %>%  mutate(moas_curated = ifelse(moas_curated == '' & 
+                                                     pathway_name == 'RTK signaling','RTK signaling',moas_curated)) 
+
+
+```
+
+```{r EGFR kinases chEMBL}
+gdsc_1 <- str_annotate_1(str_vector = c('EGFR','erbB'), moa_new_name = 'EGF receptor inhibitor') 
+
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('^EGFR|ERBB',targets),'EGF receptor inhibitor',moas_curated))
+```
+
+```{r IGF annotation}
+
+gdsc_1<- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('IGF', targets),'IGF receptor inhibitor',moas_curated))
+gdsc_2<- gdsc_2 %>% mutate(moas_curated = ifelse(grepl('IGF', targets),'IGF receptor inhibitor',moas_curated))
+```
+
+## PI3K/mTOR signaling
+
+```{r PI3/Akt/mTOR kinases annotated}
+
+## GDSC1
+
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl( 'GSK3',targets),'GSK3 regulator',moas_curated))
+gdsc_1 <-str_annotate_1(str_vector = c('mTOR'), moa_new_name = 'mTOR inhibitor')
+gdsc_1 <-str_annotate_1(str_vector = c('AKT'), moa_new_name = 'AKT inhibitor')
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl( 'MTOR|mTOR',targets),'mTOR inhibitor',moas_curated))
+gdsc_1 <- str_annotate_1(str_vector = c('PI3'), moa_new_name = 'PI3K inhibitor') 
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl( 'PI3K',targets),'PI3K inhibitor',moas_curated)) 
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl( 'AKT',targets),'AKT inhibitor',moas_curated))
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl( '2106',drug_id),'AKT inhibitor, ROCK inhibitor',moas_curated)) 
+
+## GDSC2
+
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl( 'GSK3',targets),'GSK3 regulator',moas_curated))
+gdsc_2 <- str_annotate_2(str_vector = c('PI3K'), moa_new_name = 'PI3K inhibitor') 
+gdsc_2 <- str_annotate_2(str_vector = c('Mutant RAS','S6K','RSK'), moa_new_name = 'Other mTOR pathway regulators') 
+
+```
+
+## Chromatin regulation
+
+Soem proteins (CBP,BRPF, BAZ2...) are not aceylators but bind to acetylated proteins, that's why they are annotated as histone acet. effectors.
+
+
+```{r Histone modifications}
+
+#GDSC1
+gdsc_1 <- str_annotate_1(str_vector = c('istone deacetylase','depsipeptide'), 
+                         moa_new_name = 'Histone deacetylase inhibitor')
+
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl( 'EP300',targets),
+                                                  'Histone acetylation effector',moas_curated))
+#GDSC2
+gdsc_2 <- str_annotate_2(str_vector = c('HDAC','Sir','SIR'), 
+                         moa_new_name = 'Histone deacetylase inhibitor') 
+
+gdsc_2 <- str_annotate_2(str_vector = c('CBP','BRPF','BAZ2'), 
+                         moa_new_name = 'Histone acetylation effector') 
+
+gdsc_2 <- str_annotate_2(str_vector = c('EP300'), moa_new_name = 'Histone acetylation effector') 
+```
+
+```{r	BET inhibitor annotation}
+#GDSC1
+gdsc_1 <-gdsc_1 %>%  mutate(moas_curated = ifelse(grepl('BRD', targets),'Bromodomain inhibitor',moas_curated)) 
+
+#GDSC2
+gdsc_2 <- str_annotate_2(str_vector = c('BRD','Polybromo'), moa_new_name = 'Bromodomain inhibitor') 
+```
+
+```{r Genome integrity annotation}
+
+gdsc_1 <- str_annotate_1(str_vector = c('PARP','ADP-ribose polymerase','[ADP-ribose] polymerase'), 
+                         moa_new_name = 'PARP inhibitor')  
+
+gdsc_1 <-  gdsc_1 %>% mutate(moas_curated = ifelse(grepl('MRE11|ATM', targets),'dsDNA repair pathway',moas_curated)) 
+
+gdsc_2 <- str_annotate_2(str_vector = c('MRE11','ATM','DNAPK'), moa_new_name = 'dsDNA repair pathway') 
+gdsc_2 <- str_annotate_2(str_vector = c('ATR'), moa_new_name = 'ATR inhibitor')
+gdsc_2 <- str_annotate_2(str_vector = c('TERT','Telomerase'), moa_new_name = 'Telomerase inhibitor')
+
+
+```
+
+
+```{r Chromatin histone methylation}
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = 
+                              ifelse(grepl( 'DOT1L|EHMT|EZH2|KDM|G9A|PMRT5|LSD1|SETD8',targets),'Histone methylation regulator',moas_curated))
+
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = 
+                              ifelse(grepl( 'DOT1L|EHMT|EZH2|KDM|G9A|PMRT5|LSD1|SETD8',targets),'Histone methylation regulator',moas_curated)) 
+```
+
+## Other signaling pathways
+
+```{r wnt signaling}
+
+
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl( 'PORCN',targets),'PORCN regulator',moas_curated))
+
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl( 'TNKS',targets),'TNKS regulator',moas_curated)) 
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl( 'PORCN',targets),'PORCN regulator',moas_curated)) 
+```
+
+
+## Other annotations
+ 
+```{r antioxidant}
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl('oxidant',targets),'Antioxidant protein',moas_curated))
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl('oxidant',targets),'Antioxidant protein',moas_curated))
+```
+ 
+ 
+```{r NFkB pathway}
+
+gdsc_1 <- gdsc_1 %>% mutate(moas_curated = ifelse(grepl( 'IKK|IAP|TBK',targets),'NFkB pathway inhibitor',moas_curated))
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl( 'IKK|IAP|TBK|kappa',targets),'NFkB pathway inhibitor',moas_curated))
+
+```
+
+
+```{r Cytoskeleton and Wip}
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl( 'FAK|RAC|ROCK|MRCK',targets),'Cytoskeleton',moas_curated))
+gdsc_2 <- gdsc_2 %>% mutate(moas_curated = ifelse(grepl( 'PPM|WIP',targets),'Wip1 signaling regulator',moas_curated))
+
+
+```
+
+
+```{r final list and saved}
+rbind(gdsc_1%>% select(drug_id,pathway_name,targets,moas_curated),
+      gdsc_2 %>% select(drug_id,pathway_name,targets,moas_curated)) %>% group_by(moas_curated) %>% count() %>% arrange(desc(n))
+
+final_list_gdsc2 <- rbind(gdsc_1%>% select(drug_id,pathway_name,targets,moas_curated),
+      gdsc_2 %>% select(drug_id,pathway_name,targets,moas_curated)) %>% distinct() %>% 
+  group_by(drug_id) %>%
+  summarise(united_values = paste(moas_curated, collapse = ", ")) %>% arrange(united_values) %>% 
+  mutate(united_values = gsub(united_values,pattern ='^, ', replacement ='')) %>% mutate(united_values = gsub(united_values,pattern =', $', replacement =''))
+
+gdsc2_out <- left_join(GDSC2_drug_info %>% select(drug_id,drug_name, targets),final_list_gdsc2,
+          by = 'drug_id')
+
+
+
+write.csv(gdsc2_out,'figures/data/gdsc2_curated_MOAs.csv',sep = ';')
+```
+
+

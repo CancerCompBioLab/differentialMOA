@@ -1,0 +1,733 @@
+---
+title: "MOA_annotation_PRISM"
+author: "Maria Butjosa"
+
+---
+
+```{r setup}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+
+
+## MOAs by python
+
+```{r MOAs python}
+prism_data <- read.csv('figures/data/secondary-screen-replicate-treatment-info.csv')
+
+# moas_prism_join %>% filter(grepl(pattern = 'strogen',moas))
+
+python_chembls_moas <- read.csv('data_curation_annotation/intermediate_files/moas_df_python.csv') %>% 
+  mutate(MOAs = gsub( pattern = '\\:\\(',replacement = '',MOAs)) %>% 
+  mutate(MOAs = gsub( pattern = '\\, $',replacement = '',MOAs)) %>% 
+  separate_rows(MOAs, sep = ', ') %>% distinct() %>% mutate(moas = MOAs) %>% 
+  select(-MOAs)
+# 
+# moas_prism_join %>% filter(is.na(moas_curated)|moas_curated == '') %>% 
+#   separate_rows(moa, sep = ', ') %>% distinct() %>% 
+#   mutate(moas_curated = moa) %>% group_by(moas_curated) %>% count() %>% arrange(desc(n))
+```
+
+```{r}
+
+
+chembl_python_moas <- left_join(read.csv('data_curation_annotation/intermediate_files/chemblids_df_python_prism.csv')%>% 
+                                  select(-c(moas,`X.1`)) %>% distinct(),
+                                python_chembls_moas, by = c('X0' = 'X'))
+
+chembl_python_moas <- chembl_python_moas  %>% filter(!is.na(moas)) %>% 
+  filter(!is.na(moas)) %>% filter(moas != '') %>%  mutate(source = 'chEMBL') %>% 
+  mutate(name = X) %>% 
+  select(name, moas, source)
+
+
+prism_moas <- prism_data %>% select(name,moa) %>% separate_rows(moa, sep = ", ") %>% 
+  filter(!is.na(moa))  %>% distinct() %>% mutate(moas = moa) %>% 
+  mutate(source = 'PRISM') %>% select(-moa)
+
+moas_prism_join <- rbind(chembl_python_moas,prism_moas)
+
+moas_prism_join %>% filter(grepl('opamine|D[0-3]',moas)) %>% arrange(moas)
+# moas_chembl_prism <- right_join(chembl_python_moas , prism_data %>% select(name,moa, target),
+#                                by = c('X' = 'name')) %>% distinct()
+# 
+# moas_prism_join <-  moas_chembl_prism %>% separate_rows(MOAs, sep = ", ") %>% 
+#   select(X, X0, MOAs, moa, target) %>% mutate(moas = MOAs) %>% select(-MOAs)
+
+```
+```{r}
+moas_prism_join <- moas_prism_join %>% 
+  mutate(moas = paste(toupper(substr(moas, 1, 1)), substr(moas, 2, nchar(moas)), sep = ""))
+```
+
+## Annotation function
+
+```{r Annotation functions}
+moas_curated <- ''
+str_annotate_1 <- function(str_vector,moa_new_name){
+  moas_prism_join %>%
+    mutate(
+      moas_matched = grepl(paste(str_vector, collapse = "|"), moas),
+      moas_curated = ifelse(moas_matched , moa_new_name, moas_curated)) %>% 
+    select(-c('moas_matched'))
+}
+
+```
+
+
+## Cell cycle
+
+```{r Cell cycle}
+moas_prism_join <- str_annotate_1(str_vector = c('wee','PLK', 'WEE','plk'), moa_new_name = 'Wee/Plk inhibitor') 
+
+moas_prism_join <- str_annotate_1(str_vector = c('CDK','yclin dep', 'Cyclin'), moa_new_name = 'CDK inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('CHEK','Chk','CHK'), moa_new_name = 'Chk inhibitor') 
+
+```
+
+### Apoptosis and p53-related pathways
+
+```{r Apoptosis}
+
+moas_prism_join <- str_annotate_1(str_vector = c('poptosis','Bcl','BIRC5','MCL1'), 
+                                  moa_new_name = 'Apoptosis regulator inhibitor') 
+```
+
+```{r p53 pathway}
+moas_prism_join <- str_annotate_1(str_vector = c('MDM2', 'mdmd2', 'p53|P53','Mdm','MDM'), moa_new_name = 'MDM2 inhibitor') 
+
+```
+
+### MAPK annotation
+
+```{r MAPK chEMBL}
+
+moas_prism_join <- str_annotate_1(str_vector = c('RAF|raf'), moa_new_name = 'RAF kinase inhibitor') 
+moas_prism_join <- str_annotate_1(str_vector = c('MEK', 'mitogen-activated protein kinase kinase'), moa_new_name = 'MEK inhibitor') 
+moas_prism_join <- str_annotate_1(str_vector = c('ERK'), moa_new_name = 'ERK inhibitor') 
+
+```
+
+There are tubulin inhibitors, disrupting agents and stabilisers. I add them all under Tublin inhibitors umbrella.
+
+```{r Mitosis}
+
+moas_prism_join <- str_annotate_1(str_vector = c('Aur'), moa_new_name = 'Aurora kinase inhibitor') 
+
+moas_prism_join <- str_annotate_1(str_vector = c('ubulin'), moa_new_name = 'Tubulin inhibitor') 
+
+moas_prism_join <-str_annotate_1(str_vector = c('ATR'), moa_new_name = 'ATR inhibitor')
+
+```
+
+### Hormone 
+Estrogen receptor are not classified as antagonist and agonist because some are not specified and others are aslo jus modulators. 
+
+```{r Hormone annotation}
+
+
+moas_prism_join <- str_annotate_1(str_vector = c('strogen.* agonist','SERM'), moa_new_name = 'Estrogen receptor agonist') 
+moas_prism_join <- str_annotate_1(str_vector = c('strogen receptor antagonist'), moa_new_name = 'Estrogen receptor antagonist') 
+moas_prism_join <- str_annotate_1(str_vector = c('ndrogen'), moa_new_name = 'Androgen receptor/biosynthesis modulator')
+moas_prism_join <- str_annotate_1(str_vector = c('rogesterone receptor \\bagonist\\b',
+                                                 'rogesterone receptor modulator'), 
+                                  moa_new_name = 'Progesterone receptor agonist/modulator')
+
+moas_prism_join <- str_annotate_1(str_vector = c('rogesterone receptor antagonist'), 
+                                  moa_new_name = 'Progesterone receptor antagonist')
+
+
+
+```
+
+### Chromatin regulation
+
+```{r Polymarase and topoisomerase inhibitors}
+
+moas_prism_join <- str_annotate_1(str_vector = c('topoisomerase'), moa_new_name = 'Topoisomerase inhibitor') 
+moas_prism_join <- str_annotate_1(str_vector = c('opoisomerase IV'), moa_new_name = 'Bacterial topoisomerase inhibitor') 
+moas_prism_join <- str_annotate_1(str_vector = c('^DNA poly'), moa_new_name = 'DNA polymerase inhibitor') 
+moas_prism_join <- str_annotate_1(str_vector = c(' DNA poly'), moa_new_name = 'HH1 DNA polymerase inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('ADP-ribose', 'PARP'), moa_new_name = 'PARP inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('RNA polymerase'), moa_new_name = 'RNA polymerase') 
+
+```
+
+
+### PI3K/mTOR signaling
+
+```{r PI3/Akt/mTOR kinases annotated}
+
+moas_prism_join <- str_annotate_1(str_vector = c('mTOR|MTOR'), moa_new_name = 'mTOR inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('AKT', 'Akt', 'PKB'), moa_new_name = 'AKT inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('PI3','phosphatidylinositol'), moa_new_name = 'PI3K inhibitor') 
+
+```
+
+```{r Metalloproteases}
+moas_prism_join <- str_annotate_1(str_vector = c('metallo'), moa_new_name = 'Matrix metalloprotease inhibitor')
+```
+
+
+```{r Vit D}
+moas_prism_join <- str_annotate_1(str_vector = c('itamin'), moa_new_name = 'Vitamin D receptor agonist')
+```
+
+
+```{r Protein degradation}
+moas_prism_join <- str_annotate_1(str_vector = c('proteosome'), moa_new_name = 'Proteosome inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('HSP|shock'), moa_new_name = 'HSP inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('ubiq','Ubiq'), moa_new_name = 'E3 ubiquitin ligase inhibitor')
+
+```
+
+```{r HDAC inhibitors}
+moas_prism_join <- str_annotate_1(str_vector = c('istone|HDAC'), moa_new_name = 'Histone deacetylase inhibitor')
+
+```
+
+```{r PAAAIN}
+moas_prism_join <- str_annotate_1(str_vector = c('yclooxygenase'), moa_new_name = 'COX pathway inhibitor')
+```
+
+
+```{r Receptor inhibitor}
+moas_prism_join <- str_annotate_1(str_vector = c('Vascular'), moa_new_name = 'VEGF receptor inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('erbB|pidermal|EGFR'), moa_new_name = 'EGF receptor inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('nsulin-like|nsulin |IGF'), moa_new_name = 'IGFR inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('derived|PDGF'), moa_new_name = 'PDGFR inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('FLT3|lt3'), moa_new_name = 'FLT3 receptor inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('Stem cell'), moa_new_name = 'SCGF receptor inhibitor')
+```
+
+
+```{r Corticoids receptor inhibitor}
+moas_prism_join <- str_annotate_1(str_vector = c('lucocorticoid receptor agonist'), moa_new_name = 'Glucocorticoid receptor agonist')
+moas_prism_join <- str_annotate_1(str_vector = c('lucocorticoid receptor antagonist'), moa_new_name = 'Glucocorticoid receptor antagonist')
+
+moas_prism_join <- str_annotate_1(str_vector = c('romatase'), 
+                                  moa_new_name = 'Aromatase inhibitor')
+
+
+moas_prism_join <- str_annotate_1(str_vector = c('Mineralocorticoid'), 
+                                  moa_new_name = 'Mineralocorticoid receptor antagonist')
+```
+
+
+```{r Dopamine recepetors}
+moas_prism_join <- str_annotate_1(str_vector = c("dopa.*antagonist|Dopa.*antagonist"), 
+                                  moa_new_name = 'Dopamine receptor antagonist')
+moas_prism_join <- str_annotate_1(str_vector = c("dopa.*\\bagonist\\b|Dopa.*\\bagonist\\b"), 
+                                  moa_new_name = 'Dopamine receptor partial agonist')
+```
+
+
+even if there are several types of adrenergic receptors or all grouped otherwise there are too low nº of drugs per group
+
+```{r Adrenergic receptors}
+#Add inhibitor
+moas_prism_join <- str_annotate_1(str_vector = c("drenergic.*antagonist"), 
+                                  moa_new_name = 'Adrenergic receptor antagonist')
+moas_prism_join <- str_annotate_1(str_vector = c("drenergic.*\\bagonist\\b"), 
+                                  moa_new_name = 'Adrenergic receptor agonist')
+
+```
+
+HISTAMINE IS NOT FINISHED YET
+
+```{r Histamine receptor}
+
+moas_prism_join <- str_annotate_1(str_vector = c("istamine.*antagonist"), 
+                                  moa_new_name = 'Histamine receptor antagonist')
+moas_prism_join <- str_annotate_1(str_vector = c("istamine.*\\bagonist\\b"), 
+                                  moa_new_name = 'Histamine receptor agonist')
+
+```
+
+```{r Glutamate}
+
+moas_prism_join <- str_annotate_1(str_vector = c('lutamate.*antagonist'), 
+                                  moa_new_name = 'Glutamate receptor antagonist')
+moas_prism_join <- str_annotate_1(str_vector = c('lutamate.*\\bagonist\\b',
+                                                 'lutamate.*positive allosteric modulator'), 
+                                  moa_new_name = 'Glutamate receptor agonist')
+moas_prism_join <- str_annotate_1(str_vector = c('lutamate inhibitor',
+                                                 'lutamate-gated'), 
+                                  moa_new_name = 'Glutamate receptor modulator')
+```
+
+
+In bacteria, there are 2 type of DNa topoisomerases, and they are both put in the same group (Topoisomerase IV and bacterial DNA gyrase).
+
+```{r DNA DRUGS}
+## GDSC1
+moas_prism_join <- str_annotate_1(str_vector = c('Topoisomerase IV','DNA gyrase'), 
+                                  moa_new_name = 'Bacterial topoisomerase inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('DNA topoisomerase'), 
+                                  moa_new_name = 'Topoisomerase inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('DNA.*ethyltransferase'), 
+                                  moa_new_name = 'DNA methyltransferase inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('istone.*ethyltransferase'), 
+                                  moa_new_name = 'Histone methylation regulator')
+
+moas_prism_join <- str_annotate_1(str_vector = c('^DNA polymerase'), 
+                                  moa_new_name = 'DNA polymerase inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('^DNA inhibitor'), 
+                                  moa_new_name = 'DNA inhibitor')
+```
+
+the ribosome inhibitor contains both bacterial (70S, 50S) and eukaryote (80S)
+
+```{r DNA not finished}
+
+moas_prism_join <- str_annotate_1(str_vector = c('ribosome', 'Ribosome','ribosomal'), 
+                                  moa_new_name = 'Ribosome inhibitor')
+
+
+```
+
+RNA polymerase contains both bacterial and viral
+
+```{r RNA}
+
+moas_prism_join <- str_annotate_1(str_vector = c('RNA polymerase','RNA replication'), 
+                                  moa_new_name = 'RNA polymerase inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('RNA disrupting agent','RNA inhibitor'), 
+                                  moa_new_name = 'RNA inhibitor')
+
+```
+RNA synthesis could be p.e. by DNa crosslinking which doesn't allow RNA synthesis
+All serotonin are put togheter, both antagonist and agonsits, because not all are specified.
+
+```{r Serotonin}
+moas_prism_join <- str_annotate_1(str_vector = c('serotonin|Serotonin|HT'), 
+                                  moa_new_name = 'Serotonin receptor regulator')
+moas_prism_join <- str_annotate_1(str_vector = c("erotonin.*antagonist"), 
+                                  moa_new_name = 'Serotonin receptor antagonist')
+moas_prism_join <- str_annotate_1(str_vector = c("erotonin.*\\bagonist\\b"), 
+                                  moa_new_name = 'Serotonin receptor agonist')
+
+```
+
+Thymidylate is abacterial enzyme.
+
+```{r Thymidylate}
+moas_prism_join <- str_annotate_1(str_vector = c('hymidylate'), 
+                                  moa_new_name = 'Thymidylate synthase inhibitor')
+
+```
+
+
+```{r GSK3}
+moas_prism_join <- str_annotate_1(str_vector = c('synthase kinase','GSK','lycogen'), 
+                                  moa_new_name = 'GSK3 inhibitor')
+```
+
+
+```{r PKC inhibitor}
+moas_prism_join <- str_annotate_1(str_vector = c('PKC'), 
+                                  moa_new_name = 'PKC inhibitor')
+```
+
+
+Microtubule includes only tubulin and no actin actions.
+
+```{r Tublin}
+moas_prism_join %>% filter(grepl('tub|Tub',moas)) %>% arrange(moas)
+```
+
+```{r BCR ABL KINASE}
+moas_prism_join <- str_annotate_1(str_vector = c('Bcr'), 
+                                  moa_new_name = 'Bcr/Abl inhibitor')
+```
+
+```{r retinoid}
+moas_prism_join <- str_annotate_1(str_vector = c('Retin|retin'), 
+                                  moa_new_name = 'Retinoic acid receptor agonist')
+```
+
+The PPar inhibitors are annotated according tot he PRISM annotation, as it is incomplete in chembl. 
+
+```{r lipid metabolism or receptors}
+
+moas_prism_join <- str_annotate_1(str_vector = c('PPAR receptor agonist',
+                                                 'Peroxisome proliferator-activated receptor.* agonist'), 
+                                  moa_new_name = 'PPAR receptor agonist')
+
+
+moas_prism_join <- str_annotate_1(str_vector = c('HMG'), 
+                                  moa_new_name = 'HMG-CoA reductase inhibitor')
+
+```
+
+```{r Adenosine}
+
+moas_prism_join <- str_annotate_1(str_vector = c('denosine.*\bagonist\b'), 
+                                  moa_new_name = 'Adenosine receptor agonist')
+
+moas_prism_join <- str_annotate_1(str_vector = c('denosine.*receptor.*antagonist'), 
+                                  moa_new_name = 'Adenosine receptor antagonist')
+
+```
+
+```{r Cytoskeleton inhibitor}
+moas_prism_join <- str_annotate_1(str_vector = c('Rho|rho'), moa_new_name = 'ROCK inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('elastase','Elastase'), 
+                                  moa_new_name = 'Elastase inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('inesin'), 
+                                  moa_new_name = 'Kinesin inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('Focal|focal'), 
+                                  moa_new_name = 'Focal adhesion kinase inhibitor')
+```
+
+phospholipase ;phosphatase ;thymidine 
+
+```{rH or TRH rceptor}
+
+moas_prism_join <- str_annotate_1(str_vector = c('hosphofructokinase|exokinase'), 
+                                  moa_new_name = 'Glycolysis kinase modulator')
+
+moas_prism_join <- str_annotate_1(str_vector = c('monophosphatase'), 
+                                  moa_new_name = 'Inositol monophosphatase inhibitor')
+
+
+moas_prism_join <- str_annotate_1(str_vector = c('hyro'), 
+                                  moa_new_name = 'TRH or TH recepor agonist')
+
+```
+
+
+```{r Growth factors receptor inhibitors}
+
+moas_prism_join <- str_annotate_1(str_vector = c('^Insulin|^insulin'), 
+                                  moa_new_name = 'IGF receptor inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('ibroblast|FGF'), 
+                                  moa_new_name = 'FGF receptor inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('Vascular'), 
+                                  moa_new_name = 'VEGF receptor inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('erbB|pidermal|EGFR'), 
+                                  moa_new_name = 'EGF receptor inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('derived|PDGF'), 
+                                  moa_new_name = 'PDGF receptor inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('Stem cell'), 
+                                  moa_new_name = 'SCGF receptor inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('^Insulin|^insulin'), 
+                                  moa_new_name = 'IGF receptor inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('Met','MET','Hepatocyte growth factor'), 
+                                  moa_new_name = 'HGF receptor inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('acrophage'), 
+                                  moa_new_name = 'MCSF receptor inhibitor')
+```
+
+The hepatocyte growth factor receptor is the protein coded by the c-met gene!
+
+```{r Receptor inhibitor}
+
+moas_prism_join <- str_annotate_1(str_vector = c('FLT3|lt3'), moa_new_name = 'FLT3 receptor inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('Ephrin'), 
+                                  moa_new_name = 'Ephrin receptor inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('pioid'), 
+                                  moa_new_name = 'Opidoid receptor regulator')
+
+
+moas_prism_join <- str_annotate_1(str_vector = c('Endothelin','endothelin'), 
+                                  moa_new_name = 'Endothelin receptor antagonist')
+
+moas_prism_join <- str_annotate_1(str_vector = c('Trk','trk','TRK'), 
+                                  moa_new_name = 'Nerve growth factor receptor Trk-A inhibitor')
+
+```
+
+```{r Cytochrome}
+
+moas_prism_join <- str_annotate_1(str_vector = c('ytochrome P450'), 
+                                  moa_new_name = 'Cytochrome P450 inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('C-C|hemokin|CXC'), 
+                                  moa_new_name = 'CC-C chemokine receptor modulator')
+
+moas_prism_join <- str_annotate_1(str_vector = c('anhydrase|arbonic'), 
+                                  moa_new_name = 'Carbonic anhydrase inhibitor')
+
+
+moas_prism_join <- str_annotate_1(str_vector = c('esterol'), 
+                                  moa_new_name = 'Cholesterol ester transfer inhibitor')
+
+
+moas_prism_join <- str_annotate_1(str_vector = c('Farnesyl','farnesyl'), 
+                                  moa_new_name = 'Farnesyltransferase inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('eptidase'), 
+                                  moa_new_name = 'Aminopeptidase inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('monophosphate'), 
+                                  moa_new_name = 'IMPDH inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('romodomain|BET|BRD|extra-terminal'), 
+                                  moa_new_name = 'Bromodomain inhibitor')
+
+
+```
+
+
+```{r NfkB pathway}
+moas_prism_join <- str_annotate_1(str_vector = c('NFkB','nuclear factor kappa','NFkB'), 
+                                  moa_new_name = 'NFkB pathway inhibitor')
+
+```
+
+
+```{r  tyr kianse}
+
+moas_prism_join <- str_annotate_1(str_vector = c('RET'), 
+                                  moa_new_name = 'RET tyrosine kinase inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('src|SRC|Src'), 
+                                  moa_new_name = 'SRC tyrosine kinase inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('ALK |Alk |alk '), 
+                                  moa_new_name = 'ALK tyrosine kinase inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('Abl |ABL | abl '), 
+                                  moa_new_name = 'ABL tyrosine kinase inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('Bcr|BCR'), 
+                                  moa_new_name = 'Bcr/Abl inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('Neurotrophic'), 
+                                  moa_new_name = 'Neurotrophic tyrosine kinase receptor inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('NT-3'), 
+                                  moa_new_name = 'NT-3 growth factor receptor inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('TIE-2'), 
+                                  moa_new_name = 'TIE-2 kinase inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('SYK'), 
+                                  moa_new_name = 'SYK inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('HCK'), 
+                                  moa_new_name = 'HCK inhibitor')
+```
+
+
+
+```{r Other kinases}
+moas_prism_join <- str_annotate_1(str_vector = c('JAK','janus'), moa_new_name = 'JAK inhibitor') 
+moas_prism_join <- str_annotate_1(str_vector = c('p38'), moa_new_name = 'p38 MAPK inhibitor')
+
+
+moas_prism_join <- str_annotate_1(str_vector = c('Btk|btk|BTK'), moa_new_name = 'BTK inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('BRK|brk|Brk'), moa_new_name = 'BRK inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('FRK|Fyn|FYN'), moa_new_name = 'FRK inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('Lyn|LYN'), moa_new_name = 'Lyn inhibitor')
+moas_prism_join <- str_annotate_1(str_vector = c('Lyn|LYN'), moa_new_name = 'Lyn inhibitor')
+```
+
+
+```{r Acetylcholin}
+moas_prism_join <- str_annotate_1(str_vector = c('acetylcholin'), 
+                                  moa_new_name = 'Acetylcholine receptor agonist')
+```
+
+```{r}
+# moas_chembl_prism %>%  %>% group_by(mech_summary) %>% count() %>% arrange(desc(n))
+#   filter(n >3) %>% filter(n <300) %>%arrange(desc(n)) %>% 
+#   ggplot() + geom_bar(aes(x = mech_summary, y = n, fill = mech_summary), stat="identity" ) +
+#   theme(legend.position="none",axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 4)) 
+# moas_chembl_prism %>% group_by(moas)  %>% 
+#   count() 
+```
+
+```{r Angiotensin}
+moas_prism_join <- str_annotate_1(str_vector = c('ngiotensin'), 
+                                  moa_new_name = 'Angiotensin antagonist')
+```
+
+
+
+OTX015 bromodomain
+
+```{r  Sodium channels}
+moas_prism_join <- str_annotate_1(str_vector = c('sodium channel blocker','Sodium channel.*blocker'), 
+                                  moa_new_name = 'Sodium channel blocker')
+```
+
+Cotransporters are put togheer (bot cation/cation, cation/anion, and sodium/glucose)
+
+```{r Potassium channels}
+moas_prism_join <- str_annotate_1(str_vector = c('otassium channel.*opener','otassium channel.*activator'),
+                                  moa_new_name = 'Sodium channel opener/activator')
+
+
+moas_prism_join <- str_annotate_1(str_vector = c('otassium channel.*opener','otassium channel.*activator'),
+                                  moa_new_name = 'Potassium channel blocker')
+moas_prism_join <- str_annotate_1(str_vector =
+                                    c('otassium.*transport','hloride*transport','odium.*transport'),
+                                  moa_new_name = 'Potassium; Sodium or Chloride (co-)transporter inhibitor')
+
+
+```
+
+
+
+```{r  Calcium channels}
+moas_prism_join <- str_annotate_1(str_vector = c('alcium channel.*blocker'), 
+                                  moa_new_name = 'Calcium channel blocker')
+moas_prism_join <- str_annotate_1(str_vector = c('alcium channel.*activator'), 
+                                  moa_new_name = 'Calcium channel activator')
+
+```
+
+```{r PDE}
+moas_prism_join <- str_annotate_1(str_vector = c('hosphodiesterase'),
+                                  moa_new_name = 'Phosphodiesterase inhibitor')
+```
+
+
+```{r}
+moas_prism_join <- str_annotate_1(str_vector = c('phosphoinositid'), 
+                                  moa_new_name = '3-phosphoinositide dependent protein kinase-1 inhibitor')
+```
+
+```{r GABA}
+moas_prism_join <- str_annotate_1(str_vector = c('GABA'), 
+                                  moa_new_name = 'GABA modulator')
+```
+
+
+```{r TLR}
+moas_prism_join <- str_annotate_1(str_vector = c('Toll','toll','TL'), 
+                                  moa_new_name = 'TLR inhibitor')
+```
+
+
+```{r}
+moas_prism_join <- str_annotate_1(str_vector = c('phosphoinositide'), 
+                                  moa_new_name = '3-phosphoinositide dependent protein kinase-1 inhibitor')
+
+```
+
+```{r}
+moas_prism_join <- str_annotate_1(str_vector = c('pim','PIM','Pim'), 
+                                  moa_new_name = 'PIM kinase inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('syk','SYK'), 
+                                  moa_new_name = 'SYK kinase inhibitor')
+
+```
+
+```{r}
+
+moas_prism_join <- str_annotate_1(str_vector = c('aspase activator'), 
+                                  moa_new_name = 'Caspase activator')
+
+moas_prism_join <- str_annotate_1(str_vector = c('aspase.*inhibitor'), 
+                                  moa_new_name = 'Caspase inhibitor')
+
+```
+
+
+```{r}
+moas_prism_join <- str_annotate_1(str_vector = c('itric'), 
+                                  moa_new_name = 'Nitric oxide inhibitor')
+```
+
+
+```{r}
+moas_prism_join <- str_annotate_1(str_vector = c('orepinephrine'), 
+                                  moa_new_name = 'Norepinephrine reuptake/transport inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('lycoprotein'), 
+                                  moa_new_name = 'Glycoprotein inhibitor')
+
+
+moas_prism_join <- str_annotate_1(str_vector = c('Ribonucleo.*reductase'), 
+                                  moa_new_name = 'Ribonucleotide reductase inhibitor')
+```
+
+
+```{r}
+moas_prism_join <- str_annotate_1(str_vector = c('Glycine receptor'), 
+                                  moa_new_name = 'Glycine receptor agonist')
+
+
+moas_prism_join <- str_annotate_1(str_vector = c('Glycine transporter|GlyT'), 
+                                  moa_new_name = 'Glycine transporter inhibitor')
+
+```
+
+```{r DNA agent}
+
+moas_prism_join <- str_annotate_1(str_vector = 
+                                    c('alkyl','damage','DNA disrupting','cross','intercal','Choleretic'), 
+                                  moa_new_name = 'DNA alkylating/crosslinking/intercalating agent')
+```
+
+```{r}
+moas_prism_join <- str_annotate_1(str_vector = 
+                                    c('opamine.*(transporter|uptake)'), 
+                                  moa_new_name = 'Dopamine transporter/uptake inhibitor')
+moas_prism_join %>% filter(grepl('metabolite',moas))
+```
+
+```{r}
+moas_prism_join <- str_annotate_1(str_vector = c('Glucokinase','Pyruvate','Hexo','Phosphofructokinase'), 
+                                  moa_new_name = 'Glycolysis kinase modulator')
+```
+
+
+```{r}
+moas_prism_join %>% filter(grepl('PAK|p21',moas)) %>% arrange(moas_curated)
+
+```
+
+```{r}
+moas_prism_join <- str_annotate_1(str_vector = c('Prostan.*\bagonist\b'), 
+                                  moa_new_name = 'Prostanoid receptor agonist')
+moas_prism_join <- str_annotate_1(str_vector = c('Prostan.*antagonist'), 
+                                  moa_new_name = 'Prostanoid receptor antagonist')
+
+moas_prism_join <- str_annotate_1(str_vector = c('edgehog|Smoo'), 
+                                  moa_new_name = 'Hedgehog pathway inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('catenin|Wnt'), 
+                                  moa_new_name = 'Wnt signaling inhibitor')
+
+moas_prism_join <- str_annotate_1(str_vector = c('Iron'), 
+                                  moa_new_name = 'Iron chelating agent')
+
+moas_prism_join <- str_annotate_1(str_vector = c('casein','Casein'), 
+                                  moa_new_name = 'Casein inhibitior')
+
+moas_prism_join <- str_annotate_1(str_vector = c('Mitotic kinase','Monopol','Centrom'), 
+                                  moa_new_name = 'Mitosis inhibitior')
+```
+
+MOAs annotation from PRISM
+```{r}
+
+moas_prism_join <- moas_prism_join %>% mutate(moas_curated = ifelse(moas_curated == '',moas,moas_curated))
+
+write.csv(left_join(moas_prism_join %>% arrange(name,moas) %>% select(name,moas_curated) %>% distinct(),
+          prism_data %>% select(name, target), by = 'name') %>% distinct() %>% arrange(moas_curated),
+          file = 'figures/data/prism_curated_MOAs.csv')
+```
+
+
+Annotation of drugs in the NFkB pathway inhibitors has been mantained.
+

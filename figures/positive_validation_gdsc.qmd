@@ -1,0 +1,205 @@
+---
+title: "positive_validation_gdsc"
+format: html
+editor: visual
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Packages
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+# library(forcats)
+library(ggrepel)
+# library(pheatmap)
+library(fgsea)
+library(gridExtra)
+library(VennDiagram)
+library(RColorBrewer)
+library(fgsea)
+library(ggpubr)
+```
+
+### Classification
+
+```{r}
+drug_cl_glm <- readRDS('figures/data/gdsc_drug_cells.rds')
+
+```
+
+```{r ER classification}
+breast_gdsc <- drug_cl_glm %>% filter(OncotreeLineage == 'Breast') 
+breast_gdsc %>% group_by(StrippedCellLineName,LegacyMolecularSubtype) %>% summarise(n=n()) %>% arrange(LegacyMolecularSubtype)
+
+clasif_arnau <- read.table('figures/data/CCLE-BRCA_molecular-subtypes.tsv')
+ccle_info <- read.csv('figures/data/Model_v2_2023Q4.csv')
+join_ccle_arnau <- merge(clasif_arnau,ccle_info, by.x = 0,by.y = 'ModelID')
+
+breast_gdsc <- left_join(breast_gdsc,
+          join_ccle_arnau,
+          by = 'StrippedCellLineName')
+```
+
+```{r ER NAs}
+cell_lines_na <- breast_gdsc %>% filter(is.na(ER)) %>% group_by(CELL_LINE_NAME, ER, Her2) %>% summarise(n = n()) %>% pull(CELL_LINE_NAME)
+list <- ccle_info %>% filter(CellLineName %in% cell_lines_na) %>% pull(ModelID)
+ccle_info %>% filter(CellLineName %in% cell_lines_na)
+```
+
+For 4 cell lines there is no expresison data in the 24Q1 release so it must be deleated.
+
+In the filter the extra Fulvestran (drug id = 1200) is removed.
+
+```{r final count}
+breast_gdsc <- breast_gdsc %>% filter(!is.na(ER)) %>% filter(DRUG_ID != 1200)
+breast_gdsc %>% select(StrippedCellLineName,ER) 
+breast_gdsc %>% group_by(StrippedCellLineName,ER) %>% summarise(n = n()) %>% pull(ER) %>% table()
+```
+
+There are 33 breast cell lines with ER- and 14 cell lines ER+.
+
+# GDSC ER+/Er- comparison w/o Her2 state
+
+```{r}
+drug_list <- breast_gdsc %>% pull(DRUG_NAME) %>% unique()
+#coef_list <- matrix(nrow = 0, ncol = 4) %>% as.data.frame()
+l <- length(drug_list)
+breast_gdsc$ER <- factor(breast_gdsc$ER )
+breast_gdsc$ER <- factor(breast_gdsc$ER, labels = c('negative','positive'))
+
+breast_gdsc$ER <- relevel(breast_gdsc$ER,ref = 'positive')
+contrasts(breast_gdsc$ER)
+library(foreach)
+library(doParallel)
+library(parallel)
+library(dplyr)
+
+
+result <- foreach(i = 1:l, .combine = rbind) %dopar% {
+
+  m <- glm( ER ~ AUC ,
+              data = breast_gdsc %>% filter(DRUG_NAME == drug_list[i]),
+              family = binomial(link = 'logit'))
+  s <- summary(m)
+
+  c(drug_list[i],s$coefficients[2,])
+}
+coef_list_breast_er <- result %>% as.data.frame() %>% 
+  mutate('padj' = p.adjust(`Pr(>|z|)`, method = 'fdr')) %>% arrange(`Pr(>|z|)`)
+
+```
+
+```{r Volcano plot paper}
+coef_list_breast_er$Estimate <- coef_list_breast_er$Estimate %>% as.numeric()  
+coef_list_breast_er$`Pr(>|z|)` <- coef_list_breast_er$`Pr(>|z|)` %>% as.numeric() 
+coef_list_breast_er$names <- rownames(coef_list_breast_er)
+
+paper_colors <-  c('#41BBC5','#FFBA45','grey80',"#1D686E")
+
+volcano_er_gdsc_sex <- coef_list_breast_er  %>% 
+  #filter(Estimate > -40) %>% filter(!Estimate > 20) %>% 
+    mutate(significant = #V1 is the coefficient, V4 the pvalue
+             case_when(Estimate >= 0 & `Pr(>|z|)` <= 0.05 ~ "Enriched",
+                       Estimate < 0 & `Pr(>|z|)` <= 0.05 ~ "Depleated",
+                       .default = 'NOT')) %>% 
+    #Volcano plot
+    ggplot(aes(x = Estimate, y = -log(`Pr(>|z|)`))) +
+      geom_point( aes(colour = significant, size = significant), show.legend = FALSE) + 
+      
+      xlab('Coefficient') + ylab('-log(p)') +  scale_y_continuous(limits = c(0, NA))+
+      scale_size_manual(values = c(3, 3,1)) +
+      scale_colour_manual(values = paper_colors[1:3]) + theme_classic() +
+      theme(axis.text =  element_text(size = 9, family  = 'Carlitos',
+                                      #color=paper_colors[4]
+                                      ),
+            axis.title= element_text(size = 12,family  = 'Carlitos', colour = "grey30"),
+            
+            ) +
+      geom_text_repel(aes(label = 
+                            ifelse(significant %in% c('Enriched','Depleated'),as.character(V1),'')),
+                      box.padding   = 0.5, 
+                      point.padding = 0.2,
+                      size = 2.5,
+                      segment.color = 'grey50',
+                      max.overlaps = 10)
+volcano_er_gdsc_sex
+
+
+```
+
+## MOA enrichment
+
+### Read
+
+```{r}
+gdsc2_out <- read.csv('figures/data/gdsc2_curated_MOAs.csv',sep = ',')
+```
+
+
+
+```{r df drug-moa}
+
+drug_moa_uniq <- gdsc2_out %>% select(drug_name, united_values) %>% 
+  distinct(drug_name,united_values, .keep_all=TRUE) %>% 
+  tidyr::separate_rows(united_values, sep = ',')
+drug_moa_uniq$united_values <-drug_moa_uniq$united_values %>% gsub(pattern = '^ ', replacement = '')%>% as.factor()
+
+drugMOA <- split(drug_moa_uniq$drug_name,drug_moa_uniq$united_values)
+
+drugMOA$moas <- rownames(drugMOA)
+
+```
+
+```{r Ranked list by type pancan}
+
+coef_list_breast_er$Estimate <- coef_list_breast_er$Estimate %>% as.numeric()  
+coef_list_breast_er$`Pr(>|z|)` <- coef_list_breast_er$`Pr(>|z|)` %>% as.numeric() 
+
+
+p_rank_t_gdsc2 <- coef_list_breast_er %>% mutate(direction = ifelse(Estimate <0, -1,1)) %>% 
+  mutate(p_rank = -log(`Pr(>|z|)`)*direction) %>% pull(p_rank)
+names(p_rank_t_gdsc2) <- coef_list_breast_er$V1
+p_rank_t_gdsc2 <- p_rank_t_gdsc2 %>% sort()
+# head(p_rank)
+```
+
+```{r}
+source('figures/modif_gseatab.R')
+set.seed(123)
+fgseaRes <- fgseaSimple(pathways = drugMOA, 
+                  stats    = p_rank_t_gdsc2,
+                  minSize  = 3,
+                  maxSize  = 100,
+                  nperm=100000) %>% arrange(pval)
+
+
+```
+
+```{r ER antagonist step plot}
+
+plot.new()
+gsea_er_gdsc <- plotEnrichment(drugMOA[['Estrogen receptor antagonist']], p_rank_t_gdsc2,gseaParam = 1, ticksSize = 0.2) +
+  geom_line(color = "#FFBA45",size = 1)+ theme_blank()
+gsea_er_gdsc
+```
+
+```{r Dot plot paper}
+fgsea_ranked <- fgseaRes %>% filter(pval < 0.05) %>% arrange(desc(pval))
+# lock in factor level order
+fgsea_ranked$pathway <- factor(fgsea_ranked$pathway, levels = fgsea_ranked$pathway)
+
+dotplot_er_gdsc <- ggplot(fgsea_ranked, aes(x = NES, y = pathway, color = pval, size = size)) +
+  geom_point(stat = 'identity', show.legend = TRUE) +
+    labs(x = "NES",  y = NULL, color = 'pval', size= 'MOA group size')  + 
+  theme_classic2() +
+  scale_size_continuous(range = c(2,9),breaks = c(3,5, 15,30)) + 
+  geom_hline(aes(yintercept = 3.5), color = 'grey') + 
+  scale_color_gradient(high =  'white', low = '#41BBC5') 
+
+dotplot_er_gdsc
+```

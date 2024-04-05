@@ -1,0 +1,168 @@
+---
+title: "PRISM_analysis"
+author: "Maria Butjosa"
+date: "2023-09-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Packages
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(fgsea)
+library(gridExtra)
+library(VennDiagram)
+library(RColorBrewer)
+library(fgsea)
+library(ggpubr)
+
+```
+
+```{r}
+drug_cl_uniq_glm <- readRDS('preprint_repo/data/drug_cel_prism.rds')
+drug_cl_uniq_glm$PrimaryOrMetastasis <- factor(drug_cl_uniq_glm$PrimaryOrMetastasis)
+contrasts(drug_cl_uniq_glm$PrimaryOrMetastasis)
+```
+
+```{r Glm type sex 2 }
+drug_list <- drug_cl_uniq_glm %>% filter(Sex != 'Unknown') %>%  pull(name) %>% unique()
+coef_list <- matrix(nrow = 0, ncol = 4) %>% as.data.frame()
+l <- length(drug_list)
+
+library(foreach)
+library(doParallel)
+library(parallel)
+library(dplyr)
+
+mcaffinity(1:15)
+registerDoParallel(15)
+result_2 <- foreach(i = 1:l, .combine = rbind) %dopar% {
+
+  m <- glm( PrimaryOrMetastasis ~ auc + Curated_Type + Sex ,
+              data = drug_cl_uniq_glm %>% filter(Sex != 'Unknown')%>%   filter(name == drug_list[i]),
+              family = binomial(link = 'logit'))
+  s <- summary(m)
+
+  c(drug_list[i],s$coefficients[2,])
+}
+coef_list_type_sex_2 <- result_2 %>% as.data.frame() %>% 
+  mutate('padj' = p.adjust(`Pr(>|z|)`, method = 'fdr')) %>% arrange(`Pr(>|z|)`)
+
+```
+
+
+
+
+## DSEA type + Sex analysis
+
+
+```{r Volcano plot poster or paper}
+coef_list_type_sex_2$Estimate <- coef_list_type_sex_2$Estimate %>% as.numeric()  
+coef_list_type_sex_2$`Pr(>|z|)` <- coef_list_type_sex_2$`Pr(>|z|)` %>% as.numeric()
+
+vhio_colors <- c("#48A1D2","#f08821","grey80" )
+paper_colors <-  c('#41BBC5','#FFBA45','grey80')
+'#016490'
+volcano_prism <- coef_list_type_sex_2  %>% 
+  filter(Estimate > -40) %>% filter(!Estimate > 20) %>% 
+    mutate(significant = #V1 is the coefficient, V4 the pvalue
+             case_when(Estimate >= 0 & `Pr(>|z|)` <= 0.05 ~ "Enriched",
+                       Estimate < 0 & `Pr(>|z|)` <= 0.05 ~ "Depleated",
+                       .default = 'NOT')) %>% 
+    #Volcano plot
+    ggplot(aes(x = Estimate, y = -log(`Pr(>|z|)`))) +
+      geom_point( aes(colour = significant, size = significant), show.legend = FALSE) + 
+      # geom_hline(aes(yintercept=-log(0.05),color= 'pval<0.05'), linetype="dashed", 
+      #            color = "pink4") +
+      # geom_vline(aes(xintercept = 1.5,color = 1.5), linetype="dashed", 
+      #            color = "pink") + 
+      # geom_vline(aes(xintercept = -1.5), linetype="dashed", 
+      #            color = "pink") + 
+      xlab('Coefficient') + ylab('-log(p)') +  scale_y_continuous(limits = c(0, NA))+
+      scale_size_manual(values = c(2.5, 2.5,1)) + xlim(-5,7) +
+      scale_colour_manual(values = paper_colors ) + theme_classic() +
+      theme(axis.text =  element_text(size = 9, family  = 'Carlitos'),
+            axis.title= element_text(size = 12,family  = 'Carlitos', colour = "grey30" ),
+            #axis.ticks = element_line(color="#1D686E"),
+            #axis.line = element_line(color="#1D686E",linewidth = 1)
+            ) +
+      geom_text_repel(aes(label = 
+                            ifelse(significant %in% c('Enriched','Depleated'),as.character(V1),'')),
+                      box.padding   = 0.5, 
+                      point.padding = 0.2,
+                      size = 2.5,
+                      segment.color = 'grey50',
+                      max.overlaps = 10)
+volcano_prism
+
+```
+
+
+```{r df drug-moa}
+drug_moa_uniq <- read.csv('output/moas_compared.csv') %>% mutate(moas_curated = case_when(grepl('Chk|CHK',moas_curated )~ 'Chk inhibitor',
+                                                   .default = as.character(moas_curated))) 
+
+MOA2_distinct <- drug_moa_uniq %>% select(name, moas_curated) %>% distinct()
+
+MOA_nested <- split(drug_moa_uniq$name,drug_moa_uniq$moas_curated)
+
+```
+
+
+```{r Ranked list by type pancan 2}
+rownames(coef_list_type_sex_2) <- coef_list_type_sex_2$V1
+
+coef_list_type_sex_2$Estimate <- as.numeric(coef_list_type_sex_2$Estimate )
+coef_list_type_sex_2$`Pr(>|z|)` <- as.numeric(coef_list_type_sex_2$`Pr(>|z|)` )
+
+p_rank_prism_sex <- coef_list_type_sex_2 %>% mutate(direction = ifelse(Estimate <0, -1,1)) %>% 
+  mutate(p_rank_prism_sex = -log(`Pr(>|z|)`)*direction) %>% pull(p_rank_prism_sex)
+names(p_rank_prism_sex) <- rownames(coef_list_type_sex_2)
+p_rank_prism_sex <- p_rank_prism_sex %>% sort()
+# head(p_rank)
+```
+
+```{r Mutlilevel fgsea pancancer, fig.cap = 'Results of the DSEA analysis on the pancancer drug differential response results. It show the Mechanisms of action enriched and both the p and padj values.'}
+set.seed(123)
+source('preprint_repo/code/modif_gseatab.R')
+fgsea_prism_sex <- fgseaSimple(pathways = MOA_nested, 
+                  stats    = p_rank_prism_sex,
+                  minSize  = 5,
+                  maxSize  = 100,
+                  nperm=100000) %>% arrange(pval)
+
+
+```
+
+```{r}
+fgsea_ranked <- fgsea_prism_sex %>% filter(pval < 0.05) %>% arrange(desc(pval))
+# lock in factor level order
+fgsea_ranked$pathway <- factor(fgsea_ranked$pathway, levels = fgsea_ranked$pathway)
+
+prism_dotplot <- ggplot(fgsea_ranked, aes(x = NES, y = pathway, color = pval, size = size)) +
+  geom_point(stat = 'identity', show.legend = TRUE) +
+    labs(x = "NES",  y = "MOA", color = 'pval', size= 'MOA group size')  + 
+  theme_classic2() +
+  scale_size_continuous(breaks = c(8, 15,20)) + 
+  geom_hline(aes(yintercept = 3.5), color = 'grey') + 
+  scale_color_gradient(high =  '#d4f9fc', low = '#41BBC5') 
+prism_dotplot
+save_plot("plots/dotplot_coeftype_prism_paper.tif", fig = prism_dotplot, width=16, height=14)
+```
+
+```{r gsea plot}
+plot.new()
+gsea_AKT <- plotEnrichment(MOA_nested[['AKT inhibitor']], p_rank_prism_sex,gseaParam = 1, ticksSize = 0.2) +
+  geom_line(color = "#FFBA45",size = 1)+ theme_blank()
+
+gsea_AKT
+```
+
+
